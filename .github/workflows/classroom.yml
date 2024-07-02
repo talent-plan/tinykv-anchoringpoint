@@ -1,0 +1,113 @@
+name: Autograding Tests
+'on':
+- workflow_dispatch
+- repository_dispatch
+permissions:
+  checks: write
+  actions: read
+  contents: read
+jobs:
+  run-autograding-tests:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-classroom[bot]'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Project1
+      id: project1
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project1
+        setup-command: ''
+        command: "./scripts/.make_target.sh project1"
+        timeout: 10
+        max-score: 5
+    - name: Project2a
+      id: project2a
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project2a
+        setup-command: ''
+        command: "./scripts/.make_target.sh project2a"
+        timeout: 20
+        max-score: 10
+    - name: Project2b
+      id: project2b
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project2b
+        setup-command: ''
+        command: "./scripts/.make_target.sh project2b"
+        timeout: 20
+        max-score: 10
+    - name: Project2c
+      id: project2c
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project2c
+        setup-command: ''
+        command: "./scripts/.make_target.sh project2c"
+        timeout: 20
+        max-score: 10
+    - name: Project3a
+      id: project3a
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project3a
+        setup-command: ''
+        command: "./scripts/.make_target.sh project3a"
+        timeout: 20
+        max-score: 10
+    - name: Project3b
+      id: project3b
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project3b
+        setup-command: ''
+        command: "./scripts/.make_target.sh project3b"
+        timeout: 30
+        max-score: 10
+    - name: Project3c
+      id: project3c
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project3c
+        setup-command: ''
+        command: "./scripts/.make_target.sh project3c"
+        timeout: 20
+        max-score: 10
+    - name: Project4
+      id: project4
+      uses: classroom-resources/autograding-command-grader@v1
+      with:
+        test-name: Project4
+        setup-command: ''
+        command: "./scripts/.make_target.sh project4"
+        timeout: 20
+        max-score: 15
+    - name: Perf
+      id: perf
+      uses: classroom-resources/autograding-io-grader@v1
+      with:
+        test-name: Perf
+        setup-command: ''
+        command: "./scripts/.get_perf.sh"
+        input: ''
+        expected-output: PASS
+        comparison-method: exact
+        timeout: 5
+        max-score: 20
+    - name: Autograding Reporter
+      uses: classroom-resources/autograding-grading-reporter@v1
+      env:
+        PROJECT1_RESULTS: "${{steps.project1.outputs.result}}"
+        PROJECT2A_RESULTS: "${{steps.project2a.outputs.result}}"
+        PROJECT2B_RESULTS: "${{steps.project2b.outputs.result}}"
+        PROJECT2C_RESULTS: "${{steps.project2c.outputs.result}}"
+        PROJECT3A_RESULTS: "${{steps.project3a.outputs.result}}"
+        PROJECT3B_RESULTS: "${{steps.project3b.outputs.result}}"
+        PROJECT3C_RESULTS: "${{steps.project3c.outputs.result}}"
+        PROJECT4_RESULTS: "${{steps.project4.outputs.result}}"
+        PERF_RESULTS: "${{steps.perf.outputs.result}}"
+      with:
+        runners: project1,project2a,project2b,project2c,project3a,project3b,project3c,project4,perf
