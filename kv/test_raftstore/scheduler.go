@@ -365,17 +365,22 @@ func (m *MockSchedulerClient) handleHeartbeatConfVersion(region *metapb.Region) 
 				panic("should only one conf change")
 			}
 			if len(GetDiffPeers(region, searchRegion)) != 1 {
+				log.Errorf("region %v", region)
+				log.Errorf("searchRegion %v", searchRegion)
 				panic("should only one different peer")
 			}
 			if len(GetDiffPeers(searchRegion, region)) != 0 {
 				panic("should include all peers")
 			}
 		} else {
+			// peer count not change, check all peers.
+
 			MustSamePeers(searchRegion, region)
 			if searchRegion.RegionEpoch.ConfVer+1 != region.RegionEpoch.ConfVer {
 				panic("unmatched conf version")
 			}
 			if searchRegion.RegionEpoch.Version+1 != region.RegionEpoch.Version {
+
 				panic("unmatched version")
 			}
 		}

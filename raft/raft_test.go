@@ -176,8 +176,11 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 	for i := range n.peers {
 		sm := n.peers[i].(*Raft)
 		entries := sm.RaftLog.allEntries()
+
 		if len(entries) != 2 {
+			t.Fatalf("node %d: entries = %+v", i, entries)
 			t.Fatalf("node %d: len(entries) == %d, want 2", i, len(entries))
+
 		}
 		if entries[0].Term != 1 {
 			t.Errorf("node %d: term at index 1 == %d, want 1", i, entries[0].Term)
@@ -283,6 +286,7 @@ func TestLogReplication2AB(t *testing.T) {
 
 			if sm.RaftLog.committed != tt.wcommitted {
 				t.Errorf("#%d.%d: committed = %d, want %d", i, j, sm.RaftLog.committed, tt.wcommitted)
+				t.Errorf("%+v", sm.RaftLog)
 			}
 
 			ents := []pb.Entry{}
@@ -562,10 +566,10 @@ func TestProposal2AB(t *testing.T) {
 }
 
 // TestHandleMessageType_MsgAppend ensures:
-// 1. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm.
-// 2. If an existing entry conflicts with a new one (same index but different terms),
-//    delete the existing entry and all that follow it; append any new entries not already in the log.
-// 3. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry).
+//  1. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm.
+//  2. If an existing entry conflicts with a new one (same index but different terms),
+//     delete the existing entry and all that follow it; append any new entries not already in the log.
+//  3. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry).
 func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 	tests := []struct {
 		m       pb.Message
@@ -627,25 +631,20 @@ func TestRecvMessageType_MsgRequestVote2AB(t *testing.T) {
 		{StateFollower, 0, 1, None, true},
 		{StateFollower, 0, 2, None, true},
 		{StateFollower, 0, 3, None, false},
-
 		{StateFollower, 1, 0, None, true},
 		{StateFollower, 1, 1, None, true},
 		{StateFollower, 1, 2, None, true},
 		{StateFollower, 1, 3, None, false},
-
 		{StateFollower, 2, 0, None, true},
 		{StateFollower, 2, 1, None, true},
 		{StateFollower, 2, 2, None, false},
 		{StateFollower, 2, 3, None, false},
-
 		{StateFollower, 3, 0, None, true},
 		{StateFollower, 3, 1, None, true},
 		{StateFollower, 3, 2, None, false},
 		{StateFollower, 3, 3, None, false},
-
 		{StateFollower, 3, 2, 2, false},
 		{StateFollower, 3, 2, 1, true},
-
 		{StateLeader, 3, 3, 1, true},
 		{StateCandidate, 3, 3, 1, true},
 	}

@@ -750,6 +750,7 @@ func TestLeaderSyncFollowerLog2AB(t *testing.T) {
 
 		if g := diffu(ltoa(lead.RaftLog), ltoa(follower.RaftLog)); g != "" {
 			t.Errorf("#%d: log diff:\n%s", i, g)
+			t.Errorf("#%d: diff, lead log: %v, follower log: %v", i, ltoa(lead.RaftLog), ltoa(follower.RaftLog))
 		}
 	}
 }

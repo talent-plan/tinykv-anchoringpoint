@@ -14,10 +14,14 @@
 package schedulers
 
 import (
+	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/core"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule/operator"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule/opt"
+	"github.com/pingcap/tidb/util/math"
+	"go.uber.org/zap"
+	"sort"
 )
 
 func init() {
@@ -75,8 +79,113 @@ func (s *balanceRegionScheduler) IsScheduleAllowed(cluster opt.Cluster) bool {
 	return s.opController.OperatorCount(operator.OpRegion) < cluster.GetRegionScheduleLimit()
 }
 
+// Schedule implements the scheduling logic for BalanceRegionScheduler.
 func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operator {
-	// Your Code Here (3C).
 
+	suitableStores := filterStores(cluster)
+	if len(suitableStores) <= 1 {
+		return nil
+	}
+	sortStoresByRegionSizeDescending(suitableStores)
+
+	for i, sourceStore := range suitableStores {
+		candidateRegion := getCandidateRegions(cluster, sourceStore)
+		if candidateRegion != nil {
+			if len(candidateRegion.GetStoreIds()) < cluster.GetMaxReplicas() {
+				continue // Skip if the region's store count is less than MaxReplicas
+			}
+
+			targetStore := findTargetStore(suitableStores, candidateRegion, i)
+			if targetStore == nil {
+				continue // No suitable target store found, try next region
+			}
+
+			// Check if the size difference is significant enough to proceed with the transfer
+			if !isSizeDifferenceSignificant(sourceStore, targetStore, candidateRegion) {
+				continue
+			}
+
+			// Create a new peer on the target store
+			newPeer, err := cluster.AllocPeer(targetStore.GetID())
+			if err != nil {
+				log.Error("failed to allocate peer", zap.Error(err))
+				continue
+			}
+
+			// Create and return the move peer operator
+			op, err := operator.CreateMovePeerOperator("balance-region", cluster, candidateRegion, operator.OpBalance, sourceStore.GetID(), targetStore.GetID(), newPeer.GetId())
+			if err != nil {
+				log.Error("failed to create move peer operator", zap.Error(err))
+				continue
+			}
+			return op
+		}
+	}
 	return nil
+}
+
+// isSizeDifferenceSignificant checks if the size difference between the source and target store is significant.
+func isSizeDifferenceSignificant(store *core.StoreInfo, store2 *core.StoreInfo, region *core.RegionInfo) bool {
+	return math.Abs(store.GetRegionSize()-store2.GetRegionSize()) > region.GetApproximateSize()
+}
+
+// filterStores selects stores with DownTime less than MaxStoreDownTime.
+func filterStores(cluster opt.Cluster) []*core.StoreInfo {
+	var suitableStores []*core.StoreInfo
+	stores := cluster.GetStores()
+	for _, store := range stores {
+		if store.IsUp() && store.DownTime() <= cluster.GetMaxStoreDownTime() {
+			suitableStores = append(suitableStores, store)
+		}
+	}
+	return suitableStores
+}
+
+// sortStoresByRegionSizeDescending sorts stores by their region size in descending order.
+func sortStoresByRegionSizeDescending(stores []*core.StoreInfo) {
+	sort.Slice(stores, func(i, j int) bool {
+		return stores[i].GetRegionSize() > stores[j].GetRegionSize()
+	})
+}
+
+// getCandidateRegions retrieves candidate regions for a given store.
+func getCandidateRegions(cluster opt.Cluster, store *core.StoreInfo) *core.RegionInfo {
+	var region *core.RegionInfo
+	cluster.GetPendingRegionsWithLock(store.GetID(), func(rc core.RegionsContainer) {
+		region = rc.RandomRegion(nil, nil)
+	})
+	if region != nil {
+		return region
+	}
+	cluster.GetFollowersWithLock(store.GetID(), func(rc core.RegionsContainer) {
+		region = rc.RandomRegion(nil, nil)
+	})
+	if region != nil {
+		return region
+	}
+	cluster.GetLeadersWithLock(store.GetID(), func(rc core.RegionsContainer) {
+		region = rc.RandomRegion(nil, nil)
+	})
+	return region
+}
+
+// findTargetStore finds a suitable target store for a region to be transferred to.
+func findTargetStore(suitableStores []*core.StoreInfo, region *core.RegionInfo, sourceIdx int) *core.StoreInfo {
+	for i := len(suitableStores) - 1; i > sourceIdx; i-- {
+		store := suitableStores[i]
+		if !regionContainsStore(region, store) {
+			return store
+		}
+	}
+	return nil
+}
+
+// regionContainsStore checks if a region contains a specific store.
+func regionContainsStore(region *core.RegionInfo, store *core.StoreInfo) bool {
+	for _, peer := range region.GetPeers() {
+		if peer.GetStoreId() == store.GetID() {
+			return true
+		}
+	}
+	return false
 }

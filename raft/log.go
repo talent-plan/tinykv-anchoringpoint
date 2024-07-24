@@ -14,13 +14,16 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	"github.com/pingcap-incubator/tinykv/log"
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
-//  snapshot/first.....applied....committed....stabled.....last
-//  --------|------------------------------------------------|
-//                            log entries
+//	snapshot/first.....applied....committed....stabled.....last
+//	--------|------------------------------------------------|
+//	                          log entries
 //
 // for simplify the RaftLog implement should manage all log entries
 // that not truncated
@@ -50,13 +53,26 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+
 }
 
 // newLog returns log using the given storage. It recovers the log
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	return nil
+	hardState, _, _ := storage.InitialState()
+	firstIndex, _ := storage.FirstIndex()
+	lastIndex, _ := storage.LastIndex()
+	entries, _ := storage.Entries(firstIndex, lastIndex+1)
+	raftLog := &RaftLog{
+		storage:         storage,
+		committed:       hardState.Commit,
+		applied:         firstIndex - 1,
+		stabled:         lastIndex,
+		entries:         entries,
+		pendingSnapshot: nil,
+	}
+	return raftLog
 }
 
 // We need to compact the log entries in some point of time like
@@ -64,6 +80,14 @@ func newLog(storage Storage) *RaftLog {
 // grow unlimitedly in memory
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
+	firstIndex, _ := l.storage.FirstIndex()
+	if len(l.entries) > 0 {
+		if l.LastIndex() < firstIndex {
+			l.entries = make([]pb.Entry, 0)
+		} else if l.FirstIndex() < firstIndex {
+			l.entries = l.entries[firstIndex-l.FirstIndex():]
+		}
+	}
 }
 
 // allEntries return all the entries not compacted.
@@ -71,29 +95,89 @@ func (l *RaftLog) maybeCompact() {
 // note, this is one of the test stub functions you need to implement.
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+	entries := make([]pb.Entry, 0)
+	for _, entry := range l.entries {
+		if entry.Index == 0 {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+
+	entries := make([]pb.Entry, 0)
+	for _, entry := range l.entries {
+		if entry.Index <= l.stabled {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	return nil
+	ents = make([]pb.Entry, 0)
+	for _, entry := range l.entries {
+		if entry.Index <= l.applied {
+			continue
+		}
+		if entry.Index > l.committed {
+			break
+		}
+		ents = append(ents, entry)
+	}
+	return ents
+}
+func (l *RaftLog) FirstIndex() uint64 {
+	if len(l.entries) == 0 {
+		index, _ := l.storage.FirstIndex()
+		return index
+	}
+	return l.entries[0].Index
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	if len(l.entries) == 0 {
+		index, _ := l.storage.LastIndex()
+		return index
+	}
+	return l.entries[len(l.entries)-1].Index
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	// 优先从 entries 中查找
+	if len(l.entries) > 0 && i >= l.entries[0].Index && i <= l.entries[len(l.entries)-1].Index {
+		if (i - l.entries[0].Index) >= uint64(len(l.entries)) {
+			log.Errorf("i:%v  %+v", i, l.entries)
+			return 0, nil
+		}
+		return l.entries[i-l.entries[0].Index].Term, nil
+	}
+
+	term, err := l.storage.Term(i)
+	if err == nil {
+		return term, nil
+	}
+	return 0, err
+}
+
+func (l *RaftLog) appliedTo(toApply uint64) {
+	l.applied = toApply
+}
+
+func (l *RaftLog) commitTo(toCommit uint64) {
+	if l.committed < toCommit {
+		l.committed = toCommit
+	}
 }
