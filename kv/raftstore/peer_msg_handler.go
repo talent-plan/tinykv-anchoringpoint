@@ -63,8 +63,20 @@ func (d *peerMsgHandler) HandleRaftReady() {
 			d.notifyHeartbeatScheduler(applySnapRes.Region, d.peer)
 		}
 		if len(rd.Messages) > 0 {
+			voteMsgs := make([]eraftpb.Message, 0)
+			for _, msg := range rd.Messages {
+				if msg.MsgType == eraftpb.MessageType_MsgRequestVote || msg.MsgType == eraftpb.MessageType_MsgRequestVoteResponse {
+					voteMsgs = append(voteMsgs, msg)
+				}
+			}
+			for i := 0; i < 3; i++ {
+				d.Send(d.ctx.trans, voteMsgs)
+			}
 			d.Send(d.ctx.trans, rd.Messages)
+			d.Send(d.ctx.trans, rd.Messages)
+
 			log.Warnf("send raft messages %v", rd.Messages)
+			log.Infof(" %v", d.Region().Peers)
 		}
 
 		for _, entry := range rd.CommittedEntries {
@@ -354,13 +366,13 @@ func (d *peerMsgHandler) processChangePeer(entry *eraftpb.Entry) {
 		return
 	}
 	changePeer := msg.AdminRequest.ChangePeer
-	log.Errorf("processChangePeer,changeType:%v,peer:%v", changePeer.ChangeType, changePeer.Peer)
+	log.Errorf("%s processChangePeer,changeType:%v,peer:%v", d.Tag, changePeer.ChangeType, changePeer.Peer)
 	if msg.Header != nil {
 		fromEpoch := msg.GetHeader().GetRegionEpoch()
 		if fromEpoch != nil {
-			if util.IsEpochStale(fromEpoch, d.Region().RegionEpoch) {
-				log.Errorf("epoch stale, %v, %v", fromEpoch, d.Region().RegionEpoch)
-				res := ErrResp(&util.ErrEpochNotMatch{})
+			if err := util.CheckRegionEpoch(msg, d.Region(), true); err != nil {
+				log.Errorf("%v", err)
+				res := ErrResp(err)
 				d.processProposals(res, entry)
 				return
 			}
@@ -524,6 +536,7 @@ func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
 func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) error {
 	// Check store_id, make sure that the msg is dispatched to the right place.
 	if err := util.CheckStoreID(req, d.storeID()); err != nil {
+		log.Infof("%s check store id error %v", d.Tag, err)
 		return err
 	}
 
@@ -532,6 +545,7 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 	leaderID := d.LeaderId()
 	if !d.IsLeader() {
 		leader := d.getPeerFromCache(leaderID)
+		log.Infof("%s leaderid%v %v is not leader, skip proposing %v", d.Tag, leaderID, leader, req)
 		return &util.ErrNotLeader{RegionId: regionID, Leader: leader}
 	}
 	// peer_id must be the same as peer's.
@@ -552,6 +566,7 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 		if siblingRegion != nil {
 			errEpochNotMatching.Regions = append(errEpochNotMatching.Regions, siblingRegion)
 		}
+		log.Infof("%s epoch not matching %v", d.Tag, errEpochNotMatching)
 		return errEpochNotMatching
 	}
 	return err
@@ -624,14 +639,13 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 			}
 			cb.Done(res)
 		case raft_cmdpb.AdminCmdType_ChangePeer:
-			log.Errorf("ChangePeer %s propose raft command %v", d.Tag, msg.AdminRequest.ChangePeer)
-
 			changeType := msg.AdminRequest.ChangePeer.ChangeType
 			peer := msg.AdminRequest.ChangePeer.Peer
-			if changeType == eraftpb.ConfChangeType_RemoveNode && peer.Id == d.PeerId() && d.Region() != nil &&
+			if changeType == eraftpb.ConfChangeType_RemoveNode && d.Region() != nil &&
 				d.RaftGroup != nil &&
-				d.isInitialized() && d.Region().Peers != nil {
-				if len(d.Region().Peers) == 2 && d.IsLeader() {
+				d.Region().Peers != nil {
+				if len(d.Region().Peers) >= 2 && peer.Id == d.PeerId() {
+					log.Errorf("ChangePeer %s propose raft command %v,len(d.Region().Peers) == 2", d.Tag, msg.AdminRequest.ChangePeer)
 					var targetPeer uint64 = 0
 					for _, peer := range d.Region().Peers {
 						if peer.Id != d.PeerId() {
@@ -645,7 +659,12 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 					d.RaftGroup.TransferLeader(targetPeer)
 					return
 				}
+				if len(d.Region().Peers) > 2 && 2*d.RaftGroup.Raft.HbCount() <= uint64(len(d.Region().Peers))+1 {
+					return
+				}
 			}
+
+			log.Errorf("ChangePeer %s propose raft command %v", d.Tag, msg.AdminRequest.ChangePeer)
 			d.proposals = append(d.proposals, &proposal{
 				index: d.nextProposalIndex(),
 				term:  d.Term(),
@@ -698,6 +717,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 
 		}
 	}
+
 }
 
 func (d *peerMsgHandler) startToDestroyPeer() {
