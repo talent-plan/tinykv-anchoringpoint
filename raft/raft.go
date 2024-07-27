@@ -364,6 +364,10 @@ func (r *Raft) becomeLeader() {
 	r.votes = make(map[uint64]bool)
 	r.votes[r.id] = true
 	r.heartbeatElapsed = 0
+	r.electionElapsed = 0
+	r.heartbeat = make(map[uint64]bool)
+	r.heartbeat[r.id] = true
+
 	for id := range r.Prs {
 		r.Prs[id] = &Progress{
 			Match: 0,
@@ -500,7 +504,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		})
 		return
 	}
-	r.becomeFollower(m.Term, m.From)
+
 	if r.RaftLog.pendingSnapshot != nil {
 		return
 	}
@@ -516,6 +520,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		})
 		return
 	}
+	r.becomeFollower(m.Term, m.From)
 	// 如果term不匹配，说明需要减小Leader的NextIndex, 重新发送
 	if term, _ := r.RaftLog.Term(m.Index); term != m.LogTerm {
 		for i := r.RaftLog.FirstIndex(); i <= m.Index; i++ {
@@ -591,8 +596,8 @@ func (r *Raft) handleMsgRequestVote(m pb.Message) error {
 		if m.Term > r.Term {
 			r.becomeFollower(m.Term, None)
 		}
+		term, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
 		if r.Vote == None || r.Vote == m.From {
-			term, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
 			if (m.Index < r.RaftLog.LastIndex() && m.LogTerm == term) || m.LogTerm < term {
 				r.msgs = append(r.msgs, pb.Message{
 					MsgType: pb.MessageType_MsgRequestVoteResponse,
@@ -658,10 +663,7 @@ func (r *Raft) handleMsgRequestVoteResponse(m pb.Message) error {
 	if r.State != StateCandidate {
 		return nil
 	}
-	term, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
-	if m.Reject && ((m.Term > r.Term) ||
-		(m.LogTerm > term) ||
-		(m.LogTerm == term && m.Index > r.RaftLog.LastIndex())) {
+	if m.Reject && (m.Term > r.Term) {
 		r.becomeFollower(m.Term, None)
 		return nil
 	}
