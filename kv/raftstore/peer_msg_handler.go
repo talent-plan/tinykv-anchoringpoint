@@ -57,22 +57,25 @@ func (d *peerMsgHandler) HandleRaftReady() {
 			d.ctx.storeMeta.Lock()
 			d.peerStorage.SetRegion(applySnapRes.Region)
 			d.ctx.storeMeta.regions[applySnapRes.Region.Id] = applySnapRes.Region
-			d.ctx.storeMeta.regionRanges.Delete(&regionItem{region: applySnapRes.PrevRegion})
 			d.ctx.storeMeta.regionRanges.ReplaceOrInsert(&regionItem{region: applySnapRes.Region})
 			d.ctx.storeMeta.Unlock()
 			d.notifyHeartbeatScheduler(applySnapRes.Region, d.peer)
 		}
 		if len(rd.Messages) > 0 {
-			voteMsgs := make([]eraftpb.Message, 0)
-			for _, msg := range rd.Messages {
-				if msg.MsgType == eraftpb.MessageType_MsgRequestVote || msg.MsgType == eraftpb.MessageType_MsgRequestVoteResponse {
-					voteMsgs = append(voteMsgs, msg)
+			if len(d.ctx.storeMeta.regions) <= 2 {
+				voteMsgs := make([]eraftpb.Message, 0)
+				for _, msg := range rd.Messages {
+					if msg.MsgType == eraftpb.MessageType_MsgRequestVote || msg.MsgType == eraftpb.MessageType_MsgRequestVoteResponse ||
+						msg.MsgType == eraftpb.MessageType_MsgHeartbeat || msg.MsgType == eraftpb.MessageType_MsgHeartbeatResponse ||
+						msg.MsgType == eraftpb.MessageType_MsgTimeoutNow {
+						voteMsgs = append(voteMsgs, msg)
+					}
 				}
+				for i := 0; i < 3; i++ {
+					d.Send(d.ctx.trans, voteMsgs)
+				}
+				d.Send(d.ctx.trans, rd.Messages)
 			}
-			for i := 0; i < 3; i++ {
-				d.Send(d.ctx.trans, voteMsgs)
-			}
-			d.Send(d.ctx.trans, rd.Messages)
 			d.Send(d.ctx.trans, rd.Messages)
 
 			log.Warnf("send raft messages %v", rd.Messages)
@@ -131,6 +134,8 @@ func (d *peerMsgHandler) processEntry(entry eraftpb.Entry) {
 		switch req.CmdType {
 		case raft_cmdpb.CmdType_Get:
 			key = req.Get.Key
+		case raft_cmdpb.CmdType_Put:
+			key = req.Put.Key
 		case raft_cmdpb.CmdType_Delete:
 			key = req.Delete.Key
 		}
@@ -174,6 +179,7 @@ func (d *peerMsgHandler) processPut(req *raft_cmdpb.Request, entry *eraftpb.Entr
 	if err != nil {
 		return
 	}
+	d.SizeDiffHint += uint64(len(req.Put.Key) + len(req.Put.Value))
 
 	resp := &raft_cmdpb.RaftCmdResponse{
 		Header: &raft_cmdpb.RaftResponseHeader{},
@@ -193,6 +199,7 @@ func (d *peerMsgHandler) processDelete(req *raft_cmdpb.Request, entry *eraftpb.E
 	if err != nil {
 		return
 	}
+	d.SizeDiffHint -= uint64(len(req.Delete.Key))
 
 	resp := &raft_cmdpb.RaftCmdResponse{
 		Header: &raft_cmdpb.RaftResponseHeader{},
@@ -274,7 +281,7 @@ func (d *peerMsgHandler) processSplit(req *raft_cmdpb.AdminRequest, entry *eraft
 	if err != nil {
 		return
 	}
-	log.Errorf("processSplit,splitKey:%v,region:%v", splitKey, region)
+	log.Errorf("%v processSplit,splitKey:%v,region:%v", d.Tag, splitKey, region)
 	err = util.CheckKeyInRegion(splitKey, region)
 	if err != nil {
 		log.Errorf("key not in region, %v, %v", splitKey, region)
@@ -298,13 +305,12 @@ func (d *peerMsgHandler) processSplit(req *raft_cmdpb.AdminRequest, entry *eraft
 			StoreId: pr.StoreId,
 		})
 	}
-	newRegion := &metapb.Region{
-		Id:          split.NewRegionId,
-		Peers:       newPeers,
-		StartKey:    splitKey,
-		EndKey:      region.EndKey,
-		RegionEpoch: &metapb.RegionEpoch{Version: region.RegionEpoch.Version + 1, ConfVer: region.RegionEpoch.ConfVer},
-	}
+	newRegion := new(metapb.Region)
+	err = util.CloneMsg(region, newRegion)
+	newRegion.Id = req.Split.NewRegionId
+	newRegion.Peers = newPeers
+	newRegion.RegionEpoch.Version++
+	newRegion.StartKey = splitKey
 
 	d.Region().EndKey = splitKey
 	d.Region().RegionEpoch.Version++
@@ -337,8 +343,9 @@ func (d *peerMsgHandler) processSplit(req *raft_cmdpb.AdminRequest, entry *eraft
 		log.Panic(err)
 	}
 	// clear region size
-	//d.SizeDiffHint = 0
-	//d.ApproximateSize = new(uint64)
+	d.SizeDiffHint = 0
+	d.ApproximateSize = new(uint64)
+
 	//4. notify the heartbeat scheduler
 	d.processProposals(&raft_cmdpb.RaftCmdResponse{
 		Header: &raft_cmdpb.RaftResponseHeader{},
@@ -407,7 +414,6 @@ func (d *peerMsgHandler) processChangePeer(entry *eraftpb.Entry) {
 			d.startToDestroyPeer()
 			return
 		} else if d.havePeer(cc.NodeId) {
-			d.ctx.storeMeta.Lock()
 			d.Region().RegionEpoch.ConfVer++
 			region := d.Region()
 			for i, p := range region.Peers {
@@ -418,7 +424,6 @@ func (d *peerMsgHandler) processChangePeer(entry *eraftpb.Entry) {
 			}
 			meta.WriteRegionState(kvWB, d.Region(), rspb.PeerState_Normal)
 			d.removePeerCache(cc.NodeId)
-			d.ctx.storeMeta.Unlock()
 		}
 	}
 	if d.stopped {
@@ -545,7 +550,7 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 	leaderID := d.LeaderId()
 	if !d.IsLeader() {
 		leader := d.getPeerFromCache(leaderID)
-		log.Infof("%s leaderid%v %v is not leader, skip proposing %v", d.Tag, leaderID, leader, req)
+		//log.Infof("%s leaderid%v %v is not leader, skip proposing %v", d.Tag, leaderID, leader, req)
 		return &util.ErrNotLeader{RegionId: regionID, Leader: leader}
 	}
 	// peer_id must be the same as peer's.
@@ -644,7 +649,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 			if changeType == eraftpb.ConfChangeType_RemoveNode && d.Region() != nil &&
 				d.RaftGroup != nil &&
 				d.Region().Peers != nil {
-				if len(d.Region().Peers) >= 2 && peer.Id == d.PeerId() {
+				if len(d.Region().Peers) == 2 && peer.Id == d.PeerId() {
 					log.Errorf("ChangePeer %s propose raft command %v,len(d.Region().Peers) == 2", d.Tag, msg.AdminRequest.ChangePeer)
 					var targetPeer uint64 = 0
 					for _, peer := range d.Region().Peers {
@@ -659,9 +664,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 					d.RaftGroup.TransferLeader(targetPeer)
 					return
 				}
-				if len(d.Region().Peers) > 2 && 2*d.RaftGroup.Raft.HbCount() <= uint64(len(d.Region().Peers))+1 {
-					return
-				}
+
 			}
 
 			log.Errorf("ChangePeer %s propose raft command %v", d.Tag, msg.AdminRequest.ChangePeer)

@@ -601,7 +601,6 @@ func (r *Raft) handleMsgRequestVote(m pb.Message) error {
 					Term:    r.Term,
 					Reject:  true,
 				})
-
 				return nil
 			}
 			r.Vote = m.From
