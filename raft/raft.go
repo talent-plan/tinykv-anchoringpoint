@@ -504,7 +504,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		})
 		return
 	}
-
+	r.becomeFollower(m.Term, m.From)
 	if r.RaftLog.pendingSnapshot != nil {
 		return
 	}
@@ -520,7 +520,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		})
 		return
 	}
-	r.becomeFollower(m.Term, m.From)
+
 	// 如果term不匹配，说明需要减小Leader的NextIndex, 重新发送
 	if term, _ := r.RaftLog.Term(m.Index); term != m.LogTerm {
 		for i := r.RaftLog.FirstIndex(); i <= m.Index; i++ {

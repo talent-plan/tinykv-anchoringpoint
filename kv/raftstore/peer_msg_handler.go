@@ -62,7 +62,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 			d.notifyHeartbeatScheduler(applySnapRes.Region, d.peer)
 		}
 		if len(rd.Messages) > 0 {
-			if len(d.ctx.storeMeta.regions) <= 2 {
+			if len(d.ctx.storeMeta.regions) <= 1 {
 				voteMsgs := make([]eraftpb.Message, 0)
 				for _, msg := range rd.Messages {
 					if msg.MsgType == eraftpb.MessageType_MsgRequestVote || msg.MsgType == eraftpb.MessageType_MsgRequestVoteResponse ||
@@ -571,7 +571,6 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 		if siblingRegion != nil {
 			errEpochNotMatching.Regions = append(errEpochNotMatching.Regions, siblingRegion)
 		}
-		log.Infof("%s epoch not matching %v", d.Tag, errEpochNotMatching)
 		return errEpochNotMatching
 	}
 	return err

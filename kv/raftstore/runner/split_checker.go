@@ -123,6 +123,9 @@ func (checker *sizeSplitChecker) onKv(key []byte, item engine_util.DBItem) bool 
 	if checker.currentSize > checker.splitSize && checker.splitKey == nil {
 		checker.splitKey = util.SafeCopy(key)
 	}
+	if 2*checker.currentSize >= checker.splitSize {
+		log.Warnf("region size, [regionSize:%v, key:%v],splitsize %v", checker.currentSize, key, checker.splitSize)
+	}
 	return checker.currentSize > checker.maxSize
 }
 

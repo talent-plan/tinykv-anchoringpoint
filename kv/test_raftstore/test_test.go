@@ -175,6 +175,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		cfg.RegionMaxSize = 300
 		cfg.RegionSplitSize = 200
 	}
+
 	cluster := NewTestCluster(nservers, cfg)
 	cluster.Start()
 	defer cluster.Shutdown()
