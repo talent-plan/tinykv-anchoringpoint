@@ -247,13 +247,16 @@ func (r *Raft) sendAppend(to uint64) bool {
 }
 
 func (r *Raft) sendSnapshot(to uint64) {
-	snapshot, err := r.RaftLog.storage.Snapshot()
-	if !IsEmptySnap(r.RaftLog.pendingSnapshot) {
+	var snapshot pb.Snapshot
+	var err error
+	if IsEmptySnap(r.RaftLog.pendingSnapshot) {
 		// if there is a pending snapshot, send that instead of the current snapshot
+		snapshot, err = r.RaftLog.storage.Snapshot()
+		if err != nil {
+			return
+		}
+	} else {
 		snapshot = *r.RaftLog.pendingSnapshot
-	} else if err != nil {
-		// snapshot未准备好
-		return
 	}
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
@@ -505,6 +508,8 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 	r.becomeFollower(m.Term, m.From)
+	r.electionElapsed = 0
+	r.heartbeatElapsed = 0
 	if r.RaftLog.pendingSnapshot != nil {
 		return
 	}
@@ -567,8 +572,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 	// 更新commit index
 	r.RaftLog.committed = min(m.Commit, m.Index+uint64(len(m.Entries)))
-	r.electionElapsed = 0
-	r.heartbeatElapsed = 0
 
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
@@ -771,6 +774,7 @@ func (r *Raft) handleMsgHeartbeatResponse(m pb.Message) error {
 	}
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
+		return nil
 	}
 
 	r.heartbeat[m.From] = true

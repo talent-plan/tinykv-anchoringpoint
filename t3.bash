@@ -9,7 +9,7 @@ times=20
 # title="TestSplitConfChangeSnapshotUnreliableRecover3B"
 # title="TestConfChangeRemoveLeader3B"
 # title="TestConfChangeSnapshotUnreliableRecover3B"
- title="TestSplitConfChangeSnapshotUnreliableRecoverConcurrentPartition3B"
+ title="TestConfChangeSnapshotUnreliableRecover3B"
 # title="TestConfChangeUnreliableRecover3B"
 
 # no change below this line
@@ -48,7 +48,7 @@ do
     #(GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^$(title)|| true) >> $logfile
     # (GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestConfChangeRemoveLeader3B|| true) >> $logfile
     # (GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestConfChangeSnapshotUnreliableRecover3B|| true) >> $logfile
-     (GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestSplitConfChangeSnapshotUnreliableRecoverConcurrentPartition3B|| true) >> $logfile
+     (GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestConfChangeSnapshotUnreliableRecover3B|| true) >> $logfile
      #(GO111MODULE=on go test -v --count=1 --parallel=1 -p=1 ./kv/test_raftstore -run ^TestConfChangeUnreliableRecover3B|| true) >> $logfile
 
     end=$(date +%s)
